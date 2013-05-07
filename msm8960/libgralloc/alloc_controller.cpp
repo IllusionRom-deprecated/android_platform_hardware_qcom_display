@@ -175,6 +175,12 @@ IAllocController* IAllocController::getInstance(void)
 IonController::IonController()
 {
     mIonAlloc = new IonAlloc();
+    mUseTZProtection = false;
+    char property[PROPERTY_VALUE_MAX];
+    if ((property_get("persist.gralloc.cp.level3", property, NULL) <= 0) ||
+                            (atoi(property) != 1)) {
+        mUseTZProtection = true;
+    }
 }
 
 int IonController::allocate(alloc_data& data, int usage)
@@ -194,23 +200,25 @@ int IonController::allocate(alloc_data& data, int usage)
     if(usage & GRALLOC_USAGE_PRIVATE_IOMMU_HEAP)
         ionFlags |= ION_HEAP(ION_IOMMU_HEAP_ID);
 
-    //MM Heap is exclusively a secure heap.
-    if(usage & GRALLOC_USAGE_PRIVATE_MM_HEAP) {
-        //XXX: Right now the MM heap is the only secure heap we have. When we
-        //have other secure heaps, we can change this.
-        if(usage & GRALLOC_USAGE_PROTECTED) {
+    if(usage & GRALLOC_USAGE_PROTECTED) {
+        if ((mUseTZProtection) && (usage & GRALLOC_USAGE_PRIVATE_MM_HEAP)) {
             ionFlags |= ION_HEAP(ION_CP_MM_HEAP_ID);
             ionFlags |= ION_SECURE;
-        }
-        else {
-            ALOGW("GRALLOC_USAGE_PRIVATE_MM_HEAP \
-                  cannot be used as an insecure heap!\
-                  trying to use IOMMU instead !!");
+        } else {
+            // for targets/OEMs which do not need HW level protection
+            // do not set ion secure flag & MM heap. Fallback to IOMMU heap.
             ionFlags |= ION_HEAP(ION_IOMMU_HEAP_ID);
         }
+    } else if(usage & GRALLOC_USAGE_PRIVATE_MM_HEAP) {
+        //MM Heap is exclusively a secure heap.
+        //If it is used for non secure cases, fallback to IOMMU heap
+        ALOGW("GRALLOC_USAGE_PRIVATE_MM_HEAP \
+                                cannot be used as an insecure heap!\
+                                trying to use IOMMU instead !!");
+        ionFlags |= ION_HEAP(ION_IOMMU_HEAP_ID);
     }
 
-    if(usage & GRALLOC_USAGE_PROTECTED)
+    if(ionFlags & ION_SECURE)
          data.allocType |= private_handle_t::PRIV_FLAGS_SECURE_BUFFER;
 
     // if no flags are set, default to
